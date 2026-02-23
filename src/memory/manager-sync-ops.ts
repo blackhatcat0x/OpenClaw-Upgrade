@@ -254,7 +254,12 @@ export abstract class MemoryManagerSyncOps {
     const dir = path.dirname(dbPath);
     ensureDir(dir);
     const { DatabaseSync } = requireNodeSqlite();
-    return new DatabaseSync(dbPath, { allowExtension: this.settings.store.vector.enabled });
+    const db = new DatabaseSync(dbPath, { allowExtension: this.settings.store.vector.enabled });
+    // WAL journal mode: readers never block writers and writers never block readers,
+    // eliminating "database is locked" errors under concurrent agent runs.
+    db.exec("PRAGMA journal_mode=WAL");
+    db.exec("PRAGMA busy_timeout=5000");
+    return db;
   }
 
   private seedEmbeddingCache(sourceDb: DatabaseSync): void {
