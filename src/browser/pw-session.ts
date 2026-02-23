@@ -504,13 +504,44 @@ export function refLocator(page: Page, ref: string) {
         opts?: { name?: string; exact?: boolean },
       ) => ReturnType<Page["getByRole"]>;
     };
-    const locator = info.name
+    const primary = info.name
       ? locAny.getByRole(info.role as never, { name: info.name, exact: true })
       : locAny.getByRole(info.role as never);
-    return info.nth !== undefined ? locator.nth(info.nth) : locator;
+    let locator = info.nth !== undefined ? primary.nth(info.nth) : primary;
+    // Chain optional fallback strategies via .or() so the executor can still
+    // resolve the element when the accessible name changes (e.g. dynamic text).
+    // Each fallback is skipped when its field is absent.
+    if (info.testId) {
+      locator = locator.or(page.getByTestId(info.testId));
+    }
+    if (info.ariaLabel) {
+      locator = locator.or(page.locator(`[aria-label="${info.ariaLabel}"]`));
+    }
+    if (info.selector) {
+      locator = locator.or(page.locator(info.selector));
+    }
+    return locator;
   }
 
   return page.locator(`aria-ref=${normalized}`);
+}
+
+/**
+ * Returns true when the error is a Playwright "page / context / browser is closed"
+ * error, which happens after an idle-timeout close or a browser crash.
+ * Use this to decide whether to retry an action after re-opening the connection.
+ */
+export function isPlaywrightContextError(err: unknown): boolean {
+  const msg = err instanceof Error ? err.message : String(err);
+  return (
+    msg.includes("Target page, context or browser has been closed") ||
+    msg.includes("Browser has been closed") ||
+    msg.includes("Connection closed") ||
+    msg.includes("Playwright connection closed") ||
+    // Protocol errors referencing a closed target (e.g. Target.activateTarget on a
+    // closed tab) contain both "Protocol error" and "closed" in the message.
+    (msg.includes("Protocol error") && msg.includes("closed"))
+  );
 }
 
 export async function closePlaywrightBrowserConnection(): Promise<void> {

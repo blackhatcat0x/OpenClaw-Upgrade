@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
 import type { DatabaseSync } from "node:sqlite";
@@ -31,6 +32,9 @@ import type {
   MemorySyncProgressUpdate,
 } from "./types.js";
 const SNIPPET_MAX_CHARS = 700;
+// Hard cap on the total characters returned across all snippets to prevent
+// context bloat when many entries match. ~10 k chars ≈ ~2 500 tokens.
+const MAX_TOTAL_RESULT_CHARS = 10_000;
 const VECTOR_TABLE = "chunks_vec";
 const FTS_TABLE = "chunks_fts";
 const EMBEDDING_CACHE_TABLE = "embedding_cache";
@@ -39,6 +43,30 @@ const BATCH_FAILURE_LIMIT = 2;
 const log = createSubsystemLogger("memory");
 
 const INDEX_CACHE = new Map<string, MemoryIndexManager>();
+
+/**
+ * Deduplicate results by snippet content hash and apply the total-char cap.
+ * Preserves score-descending order; drops exact-duplicate snippets and stops
+ * once the accumulated character count would exceed MAX_TOTAL_RESULT_CHARS.
+ */
+function dedupeAndCapResults(results: MemorySearchResult[]): MemorySearchResult[] {
+  const seen = new Set<string>();
+  const out: MemorySearchResult[] = [];
+  let total = 0;
+  for (const entry of results) {
+    const hash = createHash("md5").update(entry.snippet).digest("hex");
+    if (seen.has(hash)) {
+      continue;
+    }
+    seen.add(hash);
+    if (total + entry.snippet.length > MAX_TOTAL_RESULT_CHARS) {
+      break;
+    }
+    total += entry.snippet.length;
+    out.push(entry);
+  }
+  return out;
+}
 
 export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements MemorySearchManager {
   private readonly cacheKey: string;
@@ -263,7 +291,7 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
         .filter((entry) => entry.score >= minScore)
         .slice(0, maxResults);
 
-      return merged;
+      return dedupeAndCapResults(merged);
     }
 
     const keywordResults = hybrid.enabled
@@ -277,7 +305,8 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
       : [];
 
     if (!hybrid.enabled) {
-      return vectorResults.filter((entry) => entry.score >= minScore).slice(0, maxResults);
+      const filtered = vectorResults.filter((entry) => entry.score >= minScore).slice(0, maxResults);
+      return dedupeAndCapResults(filtered);
     }
 
     const merged = await this.mergeHybridResults({
@@ -289,7 +318,7 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
       temporalDecay: hybrid.temporalDecay,
     });
 
-    return merged.filter((entry) => entry.score >= minScore).slice(0, maxResults);
+    return dedupeAndCapResults(merged.filter((entry) => entry.score >= minScore).slice(0, maxResults));
   }
 
   private async searchVector(

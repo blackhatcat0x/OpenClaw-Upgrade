@@ -11,6 +11,7 @@ export {
   forceDisconnectPlaywrightForTarget,
   focusPageByTargetIdViaPlaywright,
   getPageForTargetId,
+  isPlaywrightContextError,
   listPagesViaPlaywright,
   refLocator,
   type WithSnapshotForAI,

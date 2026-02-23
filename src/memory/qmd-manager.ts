@@ -1333,7 +1333,9 @@ export class QmdMemoryManager implements MemorySearchManager {
     const { DatabaseSync } = requireNodeSqlite();
     this.db = new DatabaseSync(this.indexPath, { readOnly: true });
     // Keep QMD recall responsive when the updater holds a write lock.
-    this.db.exec("PRAGMA busy_timeout = 1");
+    // WAL mode on the write side means reads almost never contend, but
+    // 50 ms tolerates a short checkpoint pause without blocking the caller.
+    this.db.exec("PRAGMA busy_timeout = 50");
     return this.db;
   }
 

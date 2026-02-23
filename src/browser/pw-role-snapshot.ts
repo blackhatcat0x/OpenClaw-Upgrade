@@ -3,6 +3,17 @@ export type RoleRef = {
   name?: string;
   /** Index used only when role+name duplicates exist. */
   nth?: number;
+  /**
+   * Fallback locator strategies tried via `.or()` when role+name is ambiguous
+   * or the element has no accessible name.  Fields are optional and default to
+   * undefined (no fallback).  Resolution order: testId → ariaLabel → selector.
+   */
+  /** data-testid attribute value — resolved via getByTestId(). */
+  testId?: string;
+  /** aria-label attribute value — resolved via locator('[aria-label=...]'). */
+  ariaLabel?: string;
+  /** Last-resort CSS or Playwright selector string. */
+  selector?: string;
 };
 
 export type RoleRefMap = Record<string, RoleRef>;
