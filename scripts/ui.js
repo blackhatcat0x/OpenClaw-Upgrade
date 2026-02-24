@@ -85,14 +85,43 @@ function createSpawnOptions(cmd, args, envOverride) {
     cwd: uiDir,
     stdio: "inherit",
     env: envOverride ?? process.env,
-    ...(useShell ? { shell: true } : {}),
+  };
+}
+
+function quoteWindowsCmdArg(arg) {
+  if (arg.length === 0 || /\s/.test(arg)) {
+    return `"${arg}"`;
+  }
+  return arg;
+}
+
+function createSpawnInvocation(cmd, args, envOverride) {
+  if (!shouldUseShellForCommand(cmd)) {
+    return {
+      cmd,
+      args,
+      options: createSpawnOptions(cmd, args, envOverride),
+    };
+  }
+
+  assertSafeWindowsShellArgs(args);
+  const comspec = process.env.ComSpec ?? "cmd.exe";
+  // Use the command basename so cmd.exe resolves it from PATH without
+  // embedding a spaced absolute path in the command string.
+  const commandName = path.basename(cmd);
+  const commandLine = [commandName, ...args.map(quoteWindowsCmdArg)].join(" ");
+  return {
+    cmd: comspec,
+    args: ["/d", "/s", "/c", commandLine],
+    options: createSpawnOptions(cmd, args, envOverride),
   };
 }
 
 function run(cmd, args) {
   let child;
+  const invocation = createSpawnInvocation(cmd, args);
   try {
-    child = spawn(cmd, args, createSpawnOptions(cmd, args));
+    child = spawn(invocation.cmd, invocation.args, invocation.options);
   } catch (err) {
     console.error(`Failed to launch ${cmd}:`, err);
     process.exit(1);
@@ -112,8 +141,9 @@ function run(cmd, args) {
 
 function runSync(cmd, args, envOverride) {
   let result;
+  const invocation = createSpawnInvocation(cmd, args, envOverride);
   try {
-    result = spawnSync(cmd, args, createSpawnOptions(cmd, args, envOverride));
+    result = spawnSync(invocation.cmd, invocation.args, invocation.options);
   } catch (err) {
     console.error(`Failed to launch ${cmd}:`, err);
     process.exit(1);
