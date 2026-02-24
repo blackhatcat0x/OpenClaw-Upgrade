@@ -1,4 +1,5 @@
 import path from "node:path";
+import { getImageMetadata } from "../../media/image-ops.js";
 import { ensureMediaDir, saveMediaBuffer } from "../../media/store.js";
 import { captureScreenshot, snapshotAria } from "../cdp.js";
 import {
@@ -106,7 +107,8 @@ export function registerBrowserAgentSnapshotRoutes(
   app.post("/screenshot", async (req, res) => {
     const body = readBody(req);
     const targetId = toStringOrEmpty(body.targetId) || undefined;
-    const fullPage = toBoolean(body.fullPage) ?? false;
+    const allowFullPage = body.allowFullPage === true;
+    const fullPage = body.fullPage === true && allowFullPage;
     const ref = toStringOrEmpty(body.ref) || undefined;
     const element = toStringOrEmpty(body.element) || undefined;
     const type = body.type === "jpeg" ? "jpeg" : "png";
@@ -120,48 +122,75 @@ export function registerBrowserAgentSnapshotRoutes(
       res,
       ctx,
       targetId,
-      run: async ({ profileCtx, tab, cdpUrl }) => {
-        let buffer: Buffer;
-        const shouldUsePlaywright =
-          profileCtx.profile.driver === "extension" ||
-          !tab.wsUrl ||
-          Boolean(ref) ||
-          Boolean(element);
-        if (shouldUsePlaywright) {
-          const pw = await requirePwAi(res, "screenshot");
-          if (!pw) {
-            return;
+      run: async ({ profileCtx: _profileCtx, tab, cdpUrl }) => {
+        try {
+          let buffer: Buffer;
+          const captureViaPlaywright = async (fullPageValue: boolean) => {
+            const pw = await requirePwAi(res, "screenshot");
+            if (!pw) {
+              return null;
+            }
+            return await pw.takeScreenshotViaPlaywright({
+              cdpUrl,
+              targetId: tab.targetId,
+              ref,
+              element,
+              fullPage: fullPageValue,
+              type,
+            });
+          };
+          const shouldUsePlaywright = true;
+          if (shouldUsePlaywright) {
+            const snap = await captureViaPlaywright(fullPage);
+            if (!snap) {
+              return;
+            }
+            buffer = snap.buffer;
+          } else {
+            buffer = await captureScreenshot({
+              wsUrl: tab.wsUrl ?? "",
+              fullPage,
+              format: type,
+              quality: type === "jpeg" ? 85 : undefined,
+            });
           }
-          const snap = await pw.takeScreenshotViaPlaywright({
-            cdpUrl,
-            targetId: tab.targetId,
-            ref,
-            element,
-            fullPage,
-            type,
-          });
-          buffer = snap.buffer;
-        } else {
-          buffer = await captureScreenshot({
-            wsUrl: tab.wsUrl ?? "",
-            fullPage,
-            format: type,
-            quality: type === "jpeg" ? 85 : undefined,
-          });
-        }
 
-        const normalized = await normalizeBrowserScreenshot(buffer, {
-          maxSide: DEFAULT_BROWSER_SCREENSHOT_MAX_SIDE,
-          maxBytes: DEFAULT_BROWSER_SCREENSHOT_MAX_BYTES,
-        });
-        await saveBrowserMediaResponse({
-          res,
-          buffer: normalized.buffer,
-          contentType: normalized.contentType ?? `image/${type}`,
-          maxBytes: DEFAULT_BROWSER_SCREENSHOT_MAX_BYTES,
-          targetId: tab.targetId,
-          url: tab.url,
-        });
+          // Guard against pathological "tiny strip + huge canvas" captures by retrying
+          // once with viewport-only mode when output is extremely tall/narrow.
+          if (!ref && !element) {
+            const meta = await getImageMetadata(buffer).catch(() => null);
+            const w = Number(meta?.width ?? 0);
+            const h = Number(meta?.height ?? 0);
+            const looksPathological = w > 0 && h > 0 && h >= w * 5;
+            if (looksPathological) {
+              const retry = await captureViaPlaywright(false);
+              if (retry?.buffer) {
+                buffer = retry.buffer;
+              }
+            }
+          }
+
+          const normalized = await normalizeBrowserScreenshot(buffer, {
+            maxSide: DEFAULT_BROWSER_SCREENSHOT_MAX_SIDE,
+            maxBytes: DEFAULT_BROWSER_SCREENSHOT_MAX_BYTES,
+          });
+          await saveBrowserMediaResponse({
+            res,
+            buffer: normalized.buffer,
+            contentType: normalized.contentType ?? `image/${type}`,
+            maxBytes: DEFAULT_BROWSER_SCREENSHOT_MAX_BYTES,
+            targetId: tab.targetId,
+            url: tab.url,
+          });
+        } catch (err) {
+          if (process.env.OPENCLAW_DEBUG_SCREENSHOT === "1") {
+            throw new Error(
+              `[screenshot-debug] fullPage=${String(fullPage)} allowFullPage=${String(allowFullPage)} targetId=${tab.targetId} err=${String(err)}`,
+              { cause: err },
+            );
+          }
+          throw err;
+        }
       },
     });
   });

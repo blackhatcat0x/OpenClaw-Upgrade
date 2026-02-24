@@ -47,9 +47,9 @@ describe("browser smoke e2e", () => {
       const ops: string[] = [];
 
       // ── 1. Confirm server is up ─────────────────────────────────────────
-      const statusRes = await realFetch(`${base}/status`);
-      const status = (await statusRes.json()) as { ok: boolean };
-      expect(status.ok).toBe(true);
+      const statusRes = await realFetch(`${base}/`);
+      const status = (await statusRes.json()) as { enabled: boolean };
+      expect(status.enabled).toBe(true);
       ops.push("status");
 
       // ── 2. Navigate to the "feed" page ─────────────────────────────────
@@ -97,44 +97,37 @@ describe("browser smoke e2e", () => {
     },
   );
 
-  it(
-    "context error classifier: isPlaywrightContextError identifies closed-context messages",
-    async () => {
-      const { isPlaywrightContextError } = await import(
-        "../src/browser/pw-session.js"
-      );
-      expect(isPlaywrightContextError(new Error("Target page, context or browser has been closed"))).toBe(true);
-      expect(isPlaywrightContextError(new Error("Browser has been closed"))).toBe(true);
-      expect(isPlaywrightContextError(new Error("Connection closed"))).toBe(true);
-      expect(isPlaywrightContextError(new Error("Protocol error (Target.activateTarget): closed"))).toBe(true);
-      // Non-context errors must not be misclassified.
-      expect(isPlaywrightContextError(new Error("Element not found"))).toBe(false);
-      expect(isPlaywrightContextError(new Error("Timeout exceeded"))).toBe(false);
-    },
-  );
+  it("context error classifier: isPlaywrightContextError identifies closed-context messages", async () => {
+    const { isPlaywrightContextError } = await import("../src/browser/pw-session.js");
+    expect(
+      isPlaywrightContextError(new Error("Target page, context or browser has been closed")),
+    ).toBe(true);
+    expect(isPlaywrightContextError(new Error("Browser has been closed"))).toBe(true);
+    expect(isPlaywrightContextError(new Error("Connection closed"))).toBe(true);
+    expect(
+      isPlaywrightContextError(new Error("Protocol error (Target.activateTarget): closed")),
+    ).toBe(true);
+    // Non-context errors must not be misclassified.
+    expect(isPlaywrightContextError(new Error("Element not found"))).toBe(false);
+    expect(isPlaywrightContextError(new Error("Timeout exceeded"))).toBe(false);
+  });
 
-  it(
-    "locator strategy: RoleRef accepts testId + ariaLabel + selector fallback fields",
-    async () => {
-      const { type RoleRef } = await import("../src/browser/pw-role-snapshot.js").catch(
-        () => ({ type: undefined }),
-      );
-      // Type-level check: compile-time only; runtime assert that the module exports shape is present.
-      const { getRoleSnapshotStats } = await import("../src/browser/pw-role-snapshot.js");
-      expect(typeof getRoleSnapshotStats).toBe("function");
+  it("locator strategy: RoleRef accepts testId + ariaLabel + selector fallback fields", async () => {
+    // Type-level check: compile-time only; runtime assert that the module exports shape is present.
+    const { getRoleSnapshotStats } = await import("../src/browser/pw-role-snapshot.js");
+    expect(typeof getRoleSnapshotStats).toBe("function");
 
-      // Runtime: a RoleRef with fallback fields is a plain object – no schema validation needed.
-      const ref = {
-        role: "button",
-        name: "Like",
-        testId: "like-btn",
-        ariaLabel: "Like post",
-        selector: "button.like-button",
-      } satisfies import("../src/browser/pw-role-snapshot.js").RoleRef;
+    // Runtime: a RoleRef with fallback fields is a plain object – no schema validation needed.
+    const ref = {
+      role: "button",
+      name: "Like",
+      testId: "like-btn",
+      ariaLabel: "Like post",
+      selector: "button.like-button",
+    } satisfies import("../src/browser/pw-role-snapshot.js").RoleRef;
 
-      expect(ref.testId).toBe("like-btn");
-      expect(ref.ariaLabel).toBe("Like post");
-      expect(ref.selector).toBe("button.like-button");
-    },
-  );
+    expect(ref.testId).toBe("like-btn");
+    expect(ref.ariaLabel).toBe("Like post");
+    expect(ref.selector).toBe("button.like-button");
+  });
 });

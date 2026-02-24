@@ -250,6 +250,7 @@ export async function browserScreenshotAction(
     body: JSON.stringify({
       targetId: opts.targetId,
       fullPage: opts.fullPage,
+      allowFullPage: opts.fullPage === true ? true : undefined,
       ref: opts.ref,
       element: opts.element,
       type: opts.type,

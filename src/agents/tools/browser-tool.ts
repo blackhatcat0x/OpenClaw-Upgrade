@@ -589,7 +589,7 @@ export function createBrowserTool(opts?: {
         }
         case "screenshot": {
           const targetId = readStringParam(params, "targetId");
-          const fullPage = Boolean(params.fullPage);
+          const fullPage = params.fullPage === true;
           const ref = readStringParam(params, "ref");
           const element = readStringParam(params, "element");
           const type = params.type === "jpeg" ? "jpeg" : "png";
@@ -601,6 +601,7 @@ export function createBrowserTool(opts?: {
                 body: {
                   targetId,
                   fullPage,
+                  allowFullPage: fullPage ? true : undefined,
                   ref,
                   element,
                   type,

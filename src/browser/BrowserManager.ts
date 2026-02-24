@@ -23,6 +23,7 @@ type AgentSession = {
 
 /** How long an idle browser session is kept alive before auto-closing */
 const IDLE_TIMEOUT_MS = 10 * 60 * 1000;
+const DEFAULT_VIEWPORT = { width: 1280, height: 900 } as const;
 
 export class BrowserManager {
   private sessions = new Map<string, AgentSession>();
@@ -55,7 +56,26 @@ export class BrowserManager {
         "--disable-dev-shm-usage",
         "--disable-blink-features=AutomationControlled",
       ],
-      viewport: { width: 1280, height: 800 },
+      viewport: DEFAULT_VIEWPORT,
+      screen: DEFAULT_VIEWPORT,
+    });
+
+    for (const page of context.pages()) {
+      await page
+        .setViewportSize({
+          width: DEFAULT_VIEWPORT.width,
+          height: DEFAULT_VIEWPORT.height,
+        })
+        .catch(() => {});
+    }
+
+    context.on("page", (page) => {
+      void page
+        .setViewportSize({
+          width: DEFAULT_VIEWPORT.width,
+          height: DEFAULT_VIEWPORT.height,
+        })
+        .catch(() => {});
     });
 
     // Playwright persistent contexts don't expose a separate Browser object;
@@ -75,7 +95,9 @@ export class BrowserManager {
   /** Close the browser session for an agent */
   async closeSession(agentId: string): Promise<void> {
     const session = this.sessions.get(agentId);
-    if (!session) return;
+    if (!session) {
+      return;
+    }
     this.sessions.delete(agentId);
     try {
       await session.context.close();
@@ -113,6 +135,8 @@ export class BrowserManager {
 let _manager: BrowserManager | undefined;
 
 export function getBrowserManager(profilesBaseDir: string): BrowserManager {
-  if (!_manager) _manager = new BrowserManager(profilesBaseDir);
+  if (!_manager) {
+    _manager = new BrowserManager(profilesBaseDir);
+  }
   return _manager;
 }

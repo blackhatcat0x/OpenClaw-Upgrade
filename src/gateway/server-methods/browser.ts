@@ -126,11 +126,27 @@ export const browserHandlers: GatewayRequestHandlers = {
     const methodRaw = typeof typed.method === "string" ? typed.method.trim().toUpperCase() : "";
     const path = typeof typed.path === "string" ? typed.path.trim() : "";
     const query = typed.query && typeof typed.query === "object" ? typed.query : undefined;
-    const body = typed.body;
+    let body = typed.body;
     const timeoutMs =
       typeof typed.timeoutMs === "number" && Number.isFinite(typed.timeoutMs)
         ? Math.max(1, Math.floor(typed.timeoutMs))
         : undefined;
+
+    if (
+      methodRaw === "POST" &&
+      path === "/screenshot" &&
+      body &&
+      typeof body === "object" &&
+      !Array.isArray(body)
+    ) {
+      const bodyRecord = body as Record<string, unknown>;
+      const explicitFullPage = bodyRecord.fullPage === true && bodyRecord.allowFullPage === true;
+      body = {
+        ...bodyRecord,
+        fullPage: explicitFullPage ? true : undefined,
+        allowFullPage: explicitFullPage ? true : undefined,
+      };
+    }
 
     if (!methodRaw || !path) {
       respond(
