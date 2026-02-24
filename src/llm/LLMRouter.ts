@@ -30,11 +30,25 @@ const RATE_LIMIT_COOLDOWN_MS = 60_000;
 const MAX_RETRIES = 3;
 
 function parseKeys(env: string | undefined): string[] {
-  if (!env) return [];
+  if (!env) {
+    return [];
+  }
   return env
     .split(",")
     .map((k) => k.trim())
     .filter(Boolean);
+}
+
+function parseKeysFromEnvNames(env: NodeJS.ProcessEnv, names: string[]): string[] {
+  const out: string[] = [];
+  for (const name of names) {
+    const value = env[name];
+    if (!value) {
+      continue;
+    }
+    out.push(...parseKeys(value));
+  }
+  return [...new Set(out)];
 }
 
 function isRateLimit(err: unknown): boolean {
@@ -44,7 +58,9 @@ function isRateLimit(err: unknown): boolean {
 
 function isInsufficientCredits(err: unknown): boolean {
   const status = (err as { status?: number })?.status;
-  if (status === 402 || status === 403) return true;
+  if (status === 402 || status === 403) {
+    return true;
+  }
   const msg = String((err as Error)?.message ?? "").toLowerCase();
   return msg.includes("insufficient") || msg.includes("credits") || msg.includes("quota");
 }
@@ -63,9 +79,15 @@ export class LLMRouter {
     ] as [LLMProvider, LLMProviderClient][]);
 
     // Load keys from environment
-    const openaiKeys = parseKeys(process.env.OPENAI_API_KEYS);
-    const anthropicKeys = parseKeys(process.env.ANTHROPIC_API_KEYS);
-    const deepseekKeys = parseKeys(process.env.DEEPSEEK_API_KEYS);
+    const openaiKeys = parseKeysFromEnvNames(process.env, ["OPENAI_API_KEYS", "OPENAI_API_KEY"]);
+    const anthropicKeys = parseKeysFromEnvNames(process.env, [
+      "ANTHROPIC_API_KEYS",
+      "ANTHROPIC_API_KEY",
+    ]);
+    const deepseekKeys = parseKeysFromEnvNames(process.env, [
+      "DEEPSEEK_API_KEYS",
+      "DEEPSEEK_API_KEY",
+    ]);
 
     for (const key of openaiKeys) {
       this.keyHealth.push({ provider: "openai", key });
@@ -90,9 +112,7 @@ export class LLMRouter {
     return this.keyHealth
       .filter(
         (k) =>
-          k.provider === provider &&
-          !k.disabled &&
-          (!k.cooldownUntil || k.cooldownUntil <= now),
+          k.provider === provider && !k.disabled && (!k.cooldownUntil || k.cooldownUntil <= now),
       )
       .map((k) => k.key);
   }
@@ -121,17 +141,25 @@ export class LLMRouter {
     let attempts = 0;
 
     for (const provider of this.providerOrder) {
-      if (attempts >= MAX_RETRIES) break;
+      if (attempts >= MAX_RETRIES) {
+        break;
+      }
 
       // Embeddings: skip providers that don't support it
-      if (request.capability === "embeddings") continue;
+      if (request.capability === "embeddings") {
+        continue;
+      }
 
       const client = this.clients.get(provider);
-      if (!client) continue;
+      if (!client) {
+        continue;
+      }
 
       const keys = this.healthyKeysFor(provider);
       for (const key of keys) {
-        if (attempts >= MAX_RETRIES) break;
+        if (attempts >= MAX_RETRIES) {
+          break;
+        }
         attempts++;
 
         try {
@@ -162,14 +190,20 @@ export class LLMRouter {
     let attempts = 0;
 
     for (const provider of this.providerOrder) {
-      if (attempts >= MAX_RETRIES) break;
+      if (attempts >= MAX_RETRIES) {
+        break;
+      }
 
       const client = this.clients.get(provider);
-      if (!client?.embed) continue;
+      if (!client?.embed) {
+        continue;
+      }
 
       const keys = this.healthyKeysFor(provider);
       for (const key of keys) {
-        if (attempts >= MAX_RETRIES) break;
+        if (attempts >= MAX_RETRIES) {
+          break;
+        }
         attempts++;
 
         try {
@@ -235,7 +269,9 @@ export class LLMRouter {
 let _router: LLMRouter | undefined;
 
 export function getLLMRouter(): LLMRouter {
-  if (!_router) _router = new LLMRouter();
+  if (!_router) {
+    _router = new LLMRouter();
+  }
   return _router;
 }
 
@@ -244,4 +280,11 @@ export function resetLLMRouter(): void {
   _router = undefined;
 }
 
-export type { LLMCapability, LLMProvider, LLMRequest, LLMResponse, EmbeddingRequest, EmbeddingResponse };
+export type {
+  LLMCapability,
+  LLMProvider,
+  LLMRequest,
+  LLMResponse,
+  EmbeddingRequest,
+  EmbeddingResponse,
+};
