@@ -6,7 +6,7 @@ import { AgentRunner } from "../src/runner/AgentRunner.js";
 import { openTaskQueue } from "../src/runner/TaskQueue.js";
 
 type CliOptions = {
-  profile: string;
+  profile?: string;
   agentId: string;
   browserProfile: string;
   runnerDir: string;
@@ -19,11 +19,11 @@ function printHelp(): void {
 Runs one autonomous polling loop for a queued agent task, then prints queue/activity/memory summary.
 
 Options:
-  --profile <name>            OpenClaw profile (default: upgrade)
+  --profile <name>            OpenClaw profile (optional; omit for default profile)
   --agent <id>                Agent id / queue partition (default: ab12-twitterposter)
   --browser-profile <name>    Browser profile for page inspection (default: ab12-twitterposter)
   --runner-dir <path>         Directory for queue/activity/memory DBs
-                              (default: C:/Users/Clawbot/.openclaw-upgrade/runner)
+                              (default: C:/Users/Clawbot/.openclaw/runner)
   --timeout-ms <n>            Max run time in ms before forced stop (default: 120000)
   -h, --help                  Show help
 `);
@@ -31,10 +31,10 @@ Options:
 
 function parseArgs(argv: string[]): CliOptions {
   const out: CliOptions = {
-    profile: "upgrade",
+    profile: undefined,
     agentId: "ab12-twitterposter",
     browserProfile: "ab12-twitterposter",
-    runnerDir: "C:/Users/Clawbot/.openclaw-upgrade/runner",
+    runnerDir: "C:/Users/Clawbot/.openclaw/runner",
     timeoutMs: 120_000,
   };
 
@@ -92,15 +92,12 @@ async function main(): Promise<void> {
   const cwd = process.cwd();
 
   async function runOpenclaw(args: string[]): Promise<Record<string, unknown> | null> {
-    const { stdout } = await execFileAsync(
-      "node",
-      ["openclaw.mjs", "--profile", opts.profile, ...args],
-      {
-        cwd,
-        windowsHide: true,
-        maxBuffer: 8 * 1024 * 1024,
-      },
-    );
+    const profileArgs = opts.profile ? ["--profile", opts.profile] : [];
+    const { stdout } = await execFileAsync("node", ["openclaw.mjs", ...profileArgs, ...args], {
+      cwd,
+      windowsHide: true,
+      maxBuffer: 8 * 1024 * 1024,
+    });
     const text = String(stdout || "").trim();
     return text ? (JSON.parse(text) as Record<string, unknown>) : null;
   }
