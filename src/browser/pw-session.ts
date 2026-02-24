@@ -105,6 +105,9 @@ const MAX_NETWORK_REQUESTS = 500;
 let cached: ConnectedBrowser | null = null;
 let connecting: Promise<ConnectedBrowser> | null = null;
 
+const DEFAULT_VIEWPORT_WIDTH = 1280;
+const DEFAULT_VIEWPORT_HEIGHT = 900;
+
 function normalizeCdpUrl(raw: string) {
   return raw.replace(/\/$/, "");
 }
@@ -295,8 +298,12 @@ function observeContext(context: BrowserContext) {
 
   for (const page of context.pages()) {
     ensurePageState(page);
+    void ensurePageViewportAndFocus(page);
   }
-  context.on("page", (page) => ensurePageState(page));
+  context.on("page", (page) => {
+    ensurePageState(page);
+    void ensurePageViewportAndFocus(page);
+  });
 }
 
 export function ensureContextState(context: BrowserContext): ContextState {
@@ -367,6 +374,66 @@ async function getAllPages(browser: Browser): Promise<Page[]> {
   const contexts = browser.contexts();
   const pages = contexts.flatMap((c) => c.pages());
   return pages;
+}
+
+function isNonBlankUrl(url: string): boolean {
+  const normalized = String(url ?? "")
+    .trim()
+    .toLowerCase();
+  if (!normalized) {
+    return false;
+  }
+  if (normalized === "about:blank") {
+    return false;
+  }
+  if (normalized.startsWith("chrome://newtab")) {
+    return false;
+  }
+  return true;
+}
+
+function pickActivePage(pages: Page[]): Page | null {
+  for (const page of pages) {
+    if (isNonBlankUrl(page.url())) {
+      return page;
+    }
+  }
+  return pages[0] ?? null;
+}
+
+async function ensurePageViewportAndFocus(page: Page): Promise<void> {
+  try {
+    await page.setViewportSize({
+      width: DEFAULT_VIEWPORT_WIDTH,
+      height: DEFAULT_VIEWPORT_HEIGHT,
+    });
+  } catch {
+    // best-effort
+  }
+
+  try {
+    const session = await page.context().newCDPSession(page);
+    try {
+      await session.send("Emulation.setDeviceMetricsOverride", {
+        mobile: false,
+        width: DEFAULT_VIEWPORT_WIDTH,
+        height: DEFAULT_VIEWPORT_HEIGHT,
+        deviceScaleFactor: 1,
+        screenWidth: DEFAULT_VIEWPORT_WIDTH,
+        screenHeight: DEFAULT_VIEWPORT_HEIGHT,
+      });
+    } finally {
+      await session.detach().catch(() => {});
+    }
+  } catch {
+    // best-effort
+  }
+
+  try {
+    await page.bringToFront();
+  } catch {
+    // best-effort
+  }
 }
 
 async function pageTargetId(page: Page): Promise<string | null> {
@@ -452,26 +519,87 @@ export async function getPageForTargetId(opts: {
   cdpUrl: string;
   targetId?: string;
 }): Promise<Page> {
-  const { browser } = await connectBrowser(opts.cdpUrl);
-  const pages = await getAllPages(browser);
-  if (!pages.length) {
-    throw new Error("No pages available in the connected browser.");
-  }
-  const first = pages[0];
-  if (!opts.targetId) {
-    return first;
-  }
-  const found = await findPageByTargetId(browser, opts.targetId, opts.cdpUrl);
-  if (!found) {
-    // Extension relays can block CDP attachment APIs (e.g. Target.attachToBrowserTarget),
-    // which prevents us from resolving a page's targetId via newCDPSession(). If Playwright
-    // only exposes a single Page, use it as a best-effort fallback.
-    if (pages.length === 1) {
-      return first;
+  return await ensureActivePage(opts);
+}
+
+export async function ensureActivePage(opts: { cdpUrl: string; targetId?: string }): Promise<Page> {
+  return await ensureContextReady(opts);
+}
+
+export async function ensureContextReady(opts: {
+  cdpUrl: string;
+  targetId?: string;
+}): Promise<Page> {
+  let attempt = 0;
+  let lastErr: unknown;
+  while (attempt < 2) {
+    try {
+      const { browser } = await connectBrowser(opts.cdpUrl);
+      const contexts = browser.contexts();
+      const context =
+        contexts[0] ??
+        (await browser.newContext({
+          viewport: {
+            width: DEFAULT_VIEWPORT_WIDTH,
+            height: DEFAULT_VIEWPORT_HEIGHT,
+          },
+          screen: {
+            width: DEFAULT_VIEWPORT_WIDTH,
+            height: DEFAULT_VIEWPORT_HEIGHT,
+          },
+        }));
+      ensureContextState(context);
+
+      const pages = await getAllPages(browser);
+      let page: Page | null = null;
+
+      if (!opts.targetId) {
+        const active = pickActivePage(pages);
+        if (active) {
+          page = active;
+        } else {
+          page = await context.newPage();
+          ensurePageState(page);
+        }
+      } else {
+        const found = await findPageByTargetId(browser, opts.targetId, opts.cdpUrl);
+        if (found) {
+          page = found;
+        } else if (pages.length === 1 && pages[0]) {
+          // Extension relays can block CDP attachment APIs, so when only one page is visible,
+          // keep the existing best-effort fallback behavior.
+          page = pages[0];
+        } else {
+          throw new Error("tab not found");
+        }
+      }
+
+      ensurePageState(page);
+      await ensurePageViewportAndFocus(page);
+      return page;
+    } catch (err) {
+      lastErr = err;
+      if (attempt === 0 && isPlaywrightContextError(err)) {
+        await forceDisconnectPlaywrightForTarget({
+          cdpUrl: opts.cdpUrl,
+          targetId: opts.targetId,
+          reason: "ensureContextReady retry",
+        }).catch(() => {});
+        attempt += 1;
+        continue;
+      }
+      throw err;
     }
-    throw new Error("tab not found");
   }
-  return found;
+  const fallback =
+    typeof lastErr === "string"
+      ? lastErr
+      : lastErr && typeof lastErr === "object" && "message" in lastErr
+        ? typeof (lastErr as { message?: unknown }).message === "string"
+          ? (lastErr as { message?: string }).message
+          : "unknown error"
+        : "unknown error";
+  throw lastErr instanceof Error ? lastErr : new Error(fallback);
 }
 
 export function refLocator(page: Page, ref: string) {
@@ -760,11 +888,23 @@ export async function createPageViaPlaywright(opts: {
   type: string;
 }> {
   const { browser } = await connectBrowser(opts.cdpUrl);
-  const context = browser.contexts()[0] ?? (await browser.newContext());
+  const context =
+    browser.contexts()[0] ??
+    (await browser.newContext({
+      viewport: {
+        width: DEFAULT_VIEWPORT_WIDTH,
+        height: DEFAULT_VIEWPORT_HEIGHT,
+      },
+      screen: {
+        width: DEFAULT_VIEWPORT_WIDTH,
+        height: DEFAULT_VIEWPORT_HEIGHT,
+      },
+    }));
   ensureContextState(context);
 
   const page = await context.newPage();
   ensurePageState(page);
+  await ensurePageViewportAndFocus(page);
 
   // Navigate to the URL
   const targetUrl = opts.url.trim() || "about:blank";

@@ -50,4 +50,51 @@ describe("pw-session getPageForTargetId", () => {
     await closePlaywrightBrowserConnection();
     expect(browserClose).toHaveBeenCalled();
   });
+
+  it("prefers a non-blank active page when targetId is not provided", async () => {
+    connectOverCdpSpy.mockClear();
+    getChromeWebSocketUrlSpy.mockClear();
+
+    const contextOn = vi.fn();
+    const browserOn = vi.fn();
+    const browserClose = vi.fn(async () => {});
+
+    const context = {
+      pages: () => [],
+      on: contextOn,
+      newCDPSession: vi.fn(async () => {
+        throw new Error("Not allowed");
+      }),
+    } as unknown as import("playwright-core").BrowserContext;
+
+    const blankPage = {
+      on: vi.fn(),
+      context: () => context,
+      url: () => "about:blank",
+    } as unknown as import("playwright-core").Page;
+    const appPage = {
+      on: vi.fn(),
+      context: () => context,
+      url: () => "https://example.com/dashboard",
+    } as unknown as import("playwright-core").Page;
+
+    (context as unknown as { pages: () => unknown[] }).pages = () => [blankPage, appPage];
+
+    const browser = {
+      contexts: () => [context],
+      on: browserOn,
+      close: browserClose,
+    } as unknown as import("playwright-core").Browser;
+
+    connectOverCdpSpy.mockResolvedValue(browser);
+    getChromeWebSocketUrlSpy.mockResolvedValue(null);
+
+    const resolved = await getPageForTargetId({
+      cdpUrl: "http://127.0.0.1:18792",
+    });
+    expect(resolved).toBe(appPage);
+
+    await closePlaywrightBrowserConnection();
+    expect(browserClose).toHaveBeenCalled();
+  });
 });

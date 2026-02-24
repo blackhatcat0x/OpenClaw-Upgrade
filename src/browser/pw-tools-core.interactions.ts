@@ -3,10 +3,16 @@ import {
   ensurePageState,
   forceDisconnectPlaywrightForTarget,
   getPageForTargetId,
+  isPlaywrightContextError,
   refLocator,
   restoreRoleRefsForTarget,
 } from "./pw-session.js";
-import { normalizeTimeoutMs, requireRef, toAIFriendlyError } from "./pw-tools-core.shared.js";
+import {
+  normalizeTimeoutMs,
+  requireRef,
+  toAIFriendlyError,
+  withPlaywrightContextRetry,
+} from "./pw-tools-core.shared.js";
 
 export async function highlightViaPlaywright(opts: {
   cdpUrl: string;
@@ -33,32 +39,37 @@ export async function clickViaPlaywright(opts: {
   modifiers?: Array<"Alt" | "Control" | "ControlOrMeta" | "Meta" | "Shift">;
   timeoutMs?: number;
 }): Promise<void> {
-  const page = await getPageForTargetId({
-    cdpUrl: opts.cdpUrl,
-    targetId: opts.targetId,
-  });
-  ensurePageState(page);
-  restoreRoleRefsForTarget({ cdpUrl: opts.cdpUrl, targetId: opts.targetId, page });
-  const ref = requireRef(opts.ref);
-  const locator = refLocator(page, ref);
-  const timeout = Math.max(500, Math.min(60_000, Math.floor(opts.timeoutMs ?? 8000)));
-  try {
-    if (opts.doubleClick) {
-      await locator.dblclick({
-        timeout,
-        button: opts.button,
-        modifiers: opts.modifiers,
-      });
-    } else {
-      await locator.click({
-        timeout,
-        button: opts.button,
-        modifiers: opts.modifiers,
-      });
+  await withPlaywrightContextRetry({ cdpUrl: opts.cdpUrl, targetId: opts.targetId }, async () => {
+    const page = await getPageForTargetId({
+      cdpUrl: opts.cdpUrl,
+      targetId: opts.targetId,
+    });
+    ensurePageState(page);
+    restoreRoleRefsForTarget({ cdpUrl: opts.cdpUrl, targetId: opts.targetId, page });
+    const ref = requireRef(opts.ref);
+    const locator = refLocator(page, ref);
+    const timeout = Math.max(500, Math.min(60_000, Math.floor(opts.timeoutMs ?? 8000)));
+    try {
+      if (opts.doubleClick) {
+        await locator.dblclick({
+          timeout,
+          button: opts.button,
+          modifiers: opts.modifiers,
+        });
+      } else {
+        await locator.click({
+          timeout,
+          button: opts.button,
+          modifiers: opts.modifiers,
+        });
+      }
+    } catch (err) {
+      if (isPlaywrightContextError(err)) {
+        throw err;
+      }
+      throw toAIFriendlyError(err, ref);
     }
-  } catch (err) {
-    throw toAIFriendlyError(err, ref);
-  }
+  });
 }
 
 export async function hoverViaPlaywright(opts: {
@@ -137,10 +148,12 @@ export async function pressKeyViaPlaywright(opts: {
   if (!key) {
     throw new Error("key is required");
   }
-  const page = await getPageForTargetId(opts);
-  ensurePageState(page);
-  await page.keyboard.press(key, {
-    delay: Math.max(0, Math.floor(opts.delayMs ?? 0)),
+  await withPlaywrightContextRetry({ cdpUrl: opts.cdpUrl, targetId: opts.targetId }, async () => {
+    const page = await getPageForTargetId(opts);
+    ensurePageState(page);
+    await page.keyboard.press(key, {
+      delay: Math.max(0, Math.floor(opts.delayMs ?? 0)),
+    });
   });
 }
 
@@ -153,26 +166,31 @@ export async function typeViaPlaywright(opts: {
   slowly?: boolean;
   timeoutMs?: number;
 }): Promise<void> {
-  const text = String(opts.text ?? "");
-  const page = await getPageForTargetId(opts);
-  ensurePageState(page);
-  restoreRoleRefsForTarget({ cdpUrl: opts.cdpUrl, targetId: opts.targetId, page });
-  const ref = requireRef(opts.ref);
-  const locator = refLocator(page, ref);
-  const timeout = Math.max(500, Math.min(60_000, opts.timeoutMs ?? 8000));
-  try {
-    if (opts.slowly) {
-      await locator.click({ timeout });
-      await locator.type(text, { timeout, delay: 75 });
-    } else {
-      await locator.fill(text, { timeout });
+  await withPlaywrightContextRetry({ cdpUrl: opts.cdpUrl, targetId: opts.targetId }, async () => {
+    const text = String(opts.text ?? "");
+    const page = await getPageForTargetId(opts);
+    ensurePageState(page);
+    restoreRoleRefsForTarget({ cdpUrl: opts.cdpUrl, targetId: opts.targetId, page });
+    const ref = requireRef(opts.ref);
+    const locator = refLocator(page, ref);
+    const timeout = Math.max(500, Math.min(60_000, opts.timeoutMs ?? 8000));
+    try {
+      if (opts.slowly) {
+        await locator.click({ timeout });
+        await locator.type(text, { timeout, delay: 75 });
+      } else {
+        await locator.fill(text, { timeout });
+      }
+      if (opts.submit) {
+        await locator.press("Enter", { timeout });
+      }
+    } catch (err) {
+      if (isPlaywrightContextError(err)) {
+        throw err;
+      }
+      throw toAIFriendlyError(err, ref);
     }
-    if (opts.submit) {
-      await locator.press("Enter", { timeout });
-    }
-  } catch (err) {
-    throw toAIFriendlyError(err, ref);
-  }
+  });
 }
 
 export async function fillFormViaPlaywright(opts: {
@@ -449,31 +467,187 @@ export async function takeScreenshotViaPlaywright(opts: {
   fullPage?: boolean;
   type?: "png" | "jpeg";
 }): Promise<{ buffer: Buffer }> {
-  const page = await getPageForTargetId(opts);
-  ensurePageState(page);
-  restoreRoleRefsForTarget({ cdpUrl: opts.cdpUrl, targetId: opts.targetId, page });
-  const type = opts.type ?? "png";
-  if (opts.ref) {
-    if (opts.fullPage) {
-      throw new Error("fullPage is not supported for element screenshots");
-    }
-    const locator = refLocator(page, opts.ref);
-    const buffer = await locator.screenshot({ type });
-    return { buffer };
-  }
-  if (opts.element) {
-    if (opts.fullPage) {
-      throw new Error("fullPage is not supported for element screenshots");
-    }
-    const locator = page.locator(opts.element).first();
-    const buffer = await locator.screenshot({ type });
-    return { buffer };
-  }
-  const buffer = await page.screenshot({
-    type,
-    fullPage: Boolean(opts.fullPage),
-  });
-  return { buffer };
+  return await withPlaywrightContextRetry(
+    { cdpUrl: opts.cdpUrl, targetId: opts.targetId },
+    async () => {
+      const page = await getPageForTargetId(opts);
+      ensurePageState(page);
+      restoreRoleRefsForTarget({ cdpUrl: opts.cdpUrl, targetId: opts.targetId, page });
+      const type = opts.type ?? "png";
+      if (opts.ref) {
+        if (opts.fullPage) {
+          throw new Error("fullPage is not supported for element screenshots");
+        }
+        const locator = refLocator(page, opts.ref);
+        const buffer = await locator.screenshot({ type });
+        return { buffer };
+      }
+      if (opts.element) {
+        if (opts.fullPage) {
+          throw new Error("fullPage is not supported for element screenshots");
+        }
+        const locator = page.locator(opts.element).first();
+        const buffer = await locator.screenshot({ type });
+        return { buffer };
+      }
+      const captureViewportViaCdp = async (): Promise<Buffer | null> => {
+        const cdp = await page
+          .context()
+          .newCDPSession(page)
+          .catch(() => null);
+        if (!cdp) {
+          return null;
+        }
+        try {
+          await cdp.send("Page.enable").catch(() => {});
+          const metrics = (await cdp.send("Page.getLayoutMetrics").catch(() => null)) as {
+            cssVisualViewport?: {
+              pageX?: number;
+              pageY?: number;
+              width?: number;
+              height?: number;
+              clientWidth?: number;
+              clientHeight?: number;
+            };
+          } | null;
+          const vv = metrics?.cssVisualViewport;
+          const width = Math.max(1, Math.floor(Number(vv?.clientWidth ?? vv?.width ?? 1280)));
+          const height = Math.max(1, Math.floor(Number(vv?.clientHeight ?? vv?.height ?? 900)));
+          const x = Math.max(0, Number(vv?.pageX ?? 0));
+          const y = Math.max(0, Number(vv?.pageY ?? 0));
+          const result = (await cdp.send("Page.captureScreenshot", {
+            format: type,
+            ...(type === "jpeg" ? { quality: 85 } : {}),
+            fromSurface: true,
+            captureBeyondViewport: false,
+            clip: {
+              x,
+              y,
+              width,
+              height,
+              scale: 1,
+            },
+          })) as { data?: string };
+          const base64 = result?.data;
+          if (!base64) {
+            return null;
+          }
+          return Buffer.from(base64, "base64");
+        } catch {
+          return null;
+        } finally {
+          await cdp.detach().catch(() => {});
+        }
+      };
+      if (opts.fullPage !== true) {
+        // Persistent contexts can get stuck in pathological viewport states.
+        // Re-apply a sane viewport before viewport-only screenshots.
+        await page
+          .setViewportSize({
+            width: 1280,
+            height: 900,
+          })
+          .catch(() => {});
+        const cdpViewportBuffer = await captureViewportViaCdp();
+        if (cdpViewportBuffer) {
+          return { buffer: cdpViewportBuffer };
+        }
+      }
+      let buffer: Buffer;
+      try {
+        buffer = await page.screenshot({
+          type,
+          fullPage: opts.fullPage === true,
+        });
+      } catch (err) {
+        const message = String(err);
+        const canRecover = opts.fullPage !== true && /Page is too large/i.test(message);
+        if (!canRecover) {
+          throw err;
+        }
+        const session = await page
+          .context()
+          .newCDPSession(page)
+          .catch(() => null);
+        if (session) {
+          try {
+            await session.send("Emulation.clearDeviceMetricsOverride").catch(() => {});
+            await session
+              .send("Emulation.setTouchEmulationEnabled", { enabled: false })
+              .catch(() => {});
+            await session.send("Emulation.setDeviceMetricsOverride", {
+              mobile: false,
+              width: 1280,
+              height: 900,
+              deviceScaleFactor: 1,
+              screenWidth: 1280,
+              screenHeight: 900,
+            });
+          } finally {
+            await session.detach().catch(() => {});
+          }
+        }
+        await page
+          .setViewportSize({
+            width: 1280,
+            height: 900,
+          })
+          .catch(() => {});
+        try {
+          buffer = await page.screenshot({
+            type,
+            fullPage: false,
+          });
+        } catch (retryErr) {
+          // Last-resort fallback: clip to the current visual viewport via CDP.
+          const retryMessage = String(retryErr);
+          if (!/Page is too large/i.test(retryMessage)) {
+            throw retryErr;
+          }
+          const cdp = await page.context().newCDPSession(page);
+          try {
+            await cdp.send("Page.enable").catch(() => {});
+            const metrics = (await cdp.send("Page.getLayoutMetrics").catch(() => null)) as {
+              cssVisualViewport?: {
+                pageX?: number;
+                pageY?: number;
+                width?: number;
+                height?: number;
+                clientWidth?: number;
+                clientHeight?: number;
+              };
+            } | null;
+            const vv = metrics?.cssVisualViewport;
+            const width = Math.max(1, Math.floor(Number(vv?.clientWidth ?? vv?.width ?? 1280)));
+            const height = Math.max(1, Math.floor(Number(vv?.clientHeight ?? vv?.height ?? 900)));
+            const x = Math.max(0, Number(vv?.pageX ?? 0));
+            const y = Math.max(0, Number(vv?.pageY ?? 0));
+            const result = (await cdp.send("Page.captureScreenshot", {
+              format: type,
+              ...(type === "jpeg" ? { quality: 85 } : {}),
+              fromSurface: true,
+              captureBeyondViewport: false,
+              clip: {
+                x,
+                y,
+                width,
+                height,
+                scale: 1,
+              },
+            })) as { data?: string };
+            const base64 = result?.data;
+            if (!base64) {
+              throw retryErr;
+            }
+            buffer = Buffer.from(base64, "base64");
+          } finally {
+            await cdp.detach().catch(() => {});
+          }
+        }
+      }
+      return { buffer };
+    },
+  );
 }
 
 export async function screenshotWithLabelsViaPlaywright(opts: {

@@ -21,6 +21,7 @@ export function registerBrowserInspectCommands(
     .action(async (targetId: string | undefined, opts, cmd) => {
       const parent = parentOpts(cmd);
       const profile = parent?.browserProfile;
+      const fullPage = opts.fullPage === true;
       try {
         const result = await callBrowserRequest<{ path: string }>(
           parent,
@@ -30,7 +31,8 @@ export function registerBrowserInspectCommands(
             query: profile ? { profile } : undefined,
             body: {
               targetId: targetId?.trim() || undefined,
-              fullPage: Boolean(opts.fullPage),
+              fullPage,
+              allowFullPage: fullPage ? true : undefined,
               ref: opts.ref?.trim() || undefined,
               element: opts.element?.trim() || undefined,
               type: opts.type === "jpeg" ? "jpeg" : "png",

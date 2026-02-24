@@ -1,4 +1,5 @@
 import { parseRoleRef } from "./pw-role-snapshot.js";
+import { forceDisconnectPlaywrightForTarget, isPlaywrightContextError } from "./pw-session.js";
 
 let nextUploadArmId = 0;
 let nextDialogArmId = 0;
@@ -67,4 +68,38 @@ export function toAIFriendlyError(error: unknown, selector: string): Error {
   }
 
   return error instanceof Error ? error : new Error(message);
+}
+
+export async function withPlaywrightContextRetry<T>(
+  opts: { cdpUrl: string; targetId?: string },
+  run: () => Promise<T>,
+): Promise<T> {
+  let attempt = 0;
+  let lastErr: unknown;
+  while (attempt < 2) {
+    try {
+      return await run();
+    } catch (err) {
+      lastErr = err;
+      if (attempt === 0 && isPlaywrightContextError(err)) {
+        await forceDisconnectPlaywrightForTarget({
+          cdpUrl: opts.cdpUrl,
+          targetId: opts.targetId,
+          reason: "playwright action retry",
+        }).catch(() => {});
+        attempt += 1;
+        continue;
+      }
+      throw err;
+    }
+  }
+  const fallback =
+    typeof lastErr === "string"
+      ? lastErr
+      : lastErr && typeof lastErr === "object" && "message" in lastErr
+        ? typeof (lastErr as { message?: unknown }).message === "string"
+          ? (lastErr as { message?: string }).message
+          : "unknown error"
+        : "unknown error";
+  throw lastErr instanceof Error ? lastErr : new Error(fallback);
 }

@@ -30,6 +30,8 @@ const sessionMocks = vi.hoisted(() => ({
     return currentRefLocator;
   }),
   rememberRoleRefsForTarget: vi.fn(() => {}),
+  forceDisconnectPlaywrightForTarget: vi.fn(async () => {}),
+  isPlaywrightContextError: vi.fn(() => false),
 }));
 
 vi.mock("./pw-session.js", () => sessionMocks);

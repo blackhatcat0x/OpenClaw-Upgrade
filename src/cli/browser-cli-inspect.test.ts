@@ -147,7 +147,12 @@ describe("browser cli snapshot defaults", () => {
     expect((params as { body?: Record<string, unknown> } | undefined)?.body).toMatchObject({
       targetId: "tab-1",
       type: "jpeg",
-      fullPage: false,
     });
+    expect((params as { body?: Record<string, unknown> } | undefined)?.body?.fullPage).toBe(false);
+  });
+
+  it("sends fullPage=true only when --full-page is explicitly set", async () => {
+    const params = await runBrowserInspect(["screenshot", "--full-page"], true);
+    expect((params as { body?: Record<string, unknown> } | undefined)?.body?.fullPage).toBe(true);
   });
 });
